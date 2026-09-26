@@ -1,0 +1,36 @@
+#
+# KernelSU 内核配置 fragment（对应 tiann/KernelSU v3.3.0 内核模块）
+# 用途：保证 KernelSU 的依赖项在官方 config 之上保持开启。
+#
+#  关键新增项：CONFIG_FTRACE_SYSCALLS=y。
+#   官方 config 中该项为 "not set"。KernelSU v3.3.0 的 syscall 拦截
+#   （kernel/hook/syscall_hook_manager.c）调用 register_trace_prio_sys_enter
+#   挂接 sys_enter tracepoint；该 tracepoint 的定义位于
+#   kernel/trace/trace_syscalls.c（由 CONFIG_FTRACE_SYSCALLS 门控编译），
+#   不开启将产生未定义符号、内核链接失败。
+#
+# 说明（为什么这里不写 CONFIG_KSU）：
+#   CONFIG_KSU 由 KernelSU setup.sh 集成后的 drivers/kernelsu/Kconfig
+#   决定（tristate，default y，依赖 KPROBES && EXT4_FS），本仓库不把
+#   KSU 相关符号写进 defconfig / fragment，避免 KernelSU 版本变更后漂移。
+#   本机官方 config 已满足 KPROBES=y / KRETPROBES=y / KALLSYMS(_ALL)=y /
+#   TRACEPOINTS=y / FTRACE=y / EXT4_FS=y，此处仅显式保底防止意外回退。
+#
+
+# KernelSU supercall/ksud kprobe 挂钩依赖
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KRETPROBES=y
+CONFIG_KPROBE_EVENTS=y
+
+# sys_enter tracepoint（KernelSU v3.x syscall dispatcher 必需）
+CONFIG_FTRACE=y
+CONFIG_TRACEPOINTS=y
+CONFIG_FTRACE_SYSCALLS=y
+
+# 符号解析（sys_call_table / __arm64_sys_ni_syscall 定位）
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
+
+# KernelSU Kconfig 声明的另一个依赖
+CONFIG_EXT4_FS=y

@@ -1,0 +1,254 @@
+# TB330FU (Lenovo Tab M11 / barley / MTK MT8786) custom kernel build
+#
+# 基线：AOSP kernel/common commit 94c1a24cabd5（官方固件所用 6.6.30 源码）
+# config：barley_defconfig（当前槽位 boot.img 提取的官方 config，
+#         仅改 CONFIG_LOCALVERSION 与 CONFIG_LOCALVERSION_AUTO）
+# 增量：Droidspaces kABI 补丁 + GKI 专属 fragment + KernelSU (v3.3.0)
+# 产物：boot.img (Android boot v4, 可直接刷) + AnyKernel3 zip + Image.gz
+#
+# 版本串必须逐字符复现官方 banner:
+#     6.6.30-android15-8-g94c1a24cabd5-ab12293704-4k
+# （CONFIG_MODVERSIONS=y，厂商模块按 vermagic 校验）
+
+name: Build TB330FU kernel (android15-6.6.30)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_sha:
+        description: 'kernel/common commit（默认 94c1a24cabd5 = 官方 6.6.30 基线；改了它就要同步改 defconfig 里的 CONFIG_LOCALVERSION，banner 校验会自动放宽）'
+        required: false
+        default: '94c1a24cabd5'
+        type: string
+      ksu_tag:
+        description: 'KernelSU 版本 tag（默认 v3.3.0 = 官方最新 release；也可填 main）'
+        required: false
+        default: 'v3.3.0'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GKI_REPO: https://android.googlesource.com/kernel/common
+  OFFICIAL_SHA: 94c1a24cabd5
+  EXPECTED_UTSRELEASE: 6.6.30-android15-8-g94c1a24cabd5-ab12293704-4k
+
+jobs:
+  build:
+    name: android15-6.6.30 -> Image.gz -> boot.img
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      KERNEL_SHA: ${{ github.event.inputs.kernel_sha || '94c1a24cabd5' }}
+      KSU_TAG: ${{ github.event.inputs.ksu_tag || 'v3.3.0' }}
+      KERNEL_OUT: ${{ github.workspace }}/kernel/out
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout kbuild repo
+        uses: actions/checkout@v4
+
+      - name: Show build parameters
+        run: |
+          {
+            echo "## TB330FU 内核构建"
+            echo "| 参数 | 值 |"
+            echo "|---|---|"
+            echo "| kernel_sha | \`${KERNEL_SHA}\` |"
+            echo "| ksu_tag | \`${KSU_TAG}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install toolchain and build dependencies
+        run: |
+          sudo apt-get update
+          # Ubuntu 24.04 的 clang/lld/llvm 即 clang-18 家族（官方固件用 AOSP clang 18.0.0 构建）
+          sudo apt-get install -y \
+            build-essential bc bison flex libncurses-dev libssl-dev libelf-dev \
+            clang lld llvm dwarves zstd cpio python3 patch unzip zip
+          clang --version | head -n1
+          ld.lld --version | head -n1
+
+      - name: Fetch kernel source at pinned commit
+        run: |
+          set -euo pipefail
+          git init -q kernel
+          git -C kernel remote add origin "$GKI_REPO"
+          if ! git -C kernel fetch --depth 1 origin "$KERNEL_SHA"; then
+            echo "::warning::git SHA fetch 失败，回退到 gitiles 归档 tar（无 .git，不影响构建）"
+            curl -fSL "https://android.googlesource.com/kernel/common/+archive/${KERNEL_SHA}.tar.gz" -o ksrc.tar.gz
+            tar -xzf ksrc.tar.gz -C kernel
+          else
+            git -C kernel checkout --detach FETCH_HEAD
+            echo "kernel commit: $(git -C kernel rev-parse HEAD)"
+          fi
+          echo "--- Makefile 版本 ---"
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' kernel/Makefile
+          if [ "$KERNEL_SHA" = "$OFFICIAL_SHA" ] && ! grep -q '^SUBLEVEL = 30$' kernel/Makefile; then
+            echo "::error::官方基线应 SUBLEVEL=30，实际不符"; exit 1
+          fi
+          # 官方树没有 localversion* / .scmversion 文件（已核实），版本串只由
+          # Makefile(6.6.30) + CONFIG_LOCALVERSION 决定，setlocalversion 不产生增量
+          ls kernel/localversion* 2>/dev/null && echo "::warning::树中存在 localversion* 文件（官方树应为无）" || true
+
+      - name: Apply kernel patches
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          patches=(patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "::warning::patches/ 下没有补丁文件"; exit 0
+          fi
+          for p in "${patches[@]}"; do
+            echo "==> Applying $(basename "$p")"
+            if git -C kernel apply --check "$p" 2>/dev/null; then
+              git -C kernel apply "$p"
+              echo "    via git apply（上下文完全匹配）"
+            else
+              echo "::warning::git apply 失败（预期内：001 补丁 hunk2 尾部上下文在 6.6.30 有差异），改用 GNU patch --fuzz=2"
+              patch -d kernel -p1 --fuzz=2 --no-backup-if-mismatch < "$p"
+              echo "    via GNU patch --fuzz=2"
+            fi
+          done
+          find kernel -name '*.rej' -print -quit | grep -q . && { echo "::error::存在 .rej 文件"; exit 1; } || true
+
+      - name: Integrate KernelSU
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s -- "$KSU_TAG"
+          # 校验 checkout 结果与请求的 tag/分支一致（setup.sh 失败时会静默留在默认分支）
+          want="$(git -C KernelSU rev-parse "${KSU_TAG}^{commit}" 2>/dev/null || true)"
+          head="$(git -C KernelSU rev-parse HEAD)"
+          if [ -n "$want" ] && [ "$want" != "$head" ]; then
+            echo "::error::KernelSU checkout 不符：请求 ${KSU_TAG}(${want})，实际 ${head}"
+            exit 1
+          fi
+          test -e drivers/kernelsu
+          grep -q 'kernelsu' drivers/Makefile
+          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig
+          echo "KernelSU 集成完成：tag=${KSU_TAG} commit=${head}"
+
+      - name: Configure kernel (barley_defconfig + Droidspaces/KernelSU fragments)
+        run: |
+          set -euo pipefail
+          cp config/barley_defconfig kernel/arch/arm64/configs/barley_defconfig
+          make -C kernel O="$KERNEL_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 barley_defconfig
+          kernel/scripts/kconfig/merge_config.sh -m -O "$KERNEL_OUT" "$KERNEL_OUT/.config" \
+              config/droidspaces.fragment config/kernelsu.fragment
+          make -C kernel O="$KERNEL_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+
+      - name: Verify required kernel config options
+        run: |
+          set -euo pipefail
+          missing=0
+          required=(
+            # Droidspaces GKI-Exclusive Configuration（16 项）
+            SYSVIPC POSIX_MQUEUE IPC_NS PID_NS DEVTMPFS
+            NETFILTER_XT_MATCH_ADDRTYPE USER_NS
+            NETFILTER_XT_TARGET_REJECT NETFILTER_XT_TARGET_LOG
+            NETFILTER_XT_MATCH_RECENT IP_SET IP_SET_HASH_IP IP_SET_HASH_NET
+            NETFILTER_XT_SET TMPFS_POSIX_ACL TMPFS_XATTR
+            # kABI 补丁生效前提
+            ANDROID_KABI_RESERVE
+            # KernelSU v3.3.0 链接依赖（详见 config/kernelsu.fragment）
+            KPROBES HAVE_KPROBES KRETPROBES KPROBE_EVENTS FTRACE TRACEPOINTS
+            FTRACE_SYSCALLS HAVE_SYSCALL_TRACEPOINTS KALLSYMS KALLSYMS_ALL EXT4_FS KSU
+          )
+          for opt in "${required[@]}"; do
+            if grep -q "^CONFIG_${opt}=y$" "$KERNEL_OUT/.config"; then
+              echo "OK:    CONFIG_${opt}=y"
+            else
+              echo "MISS:  CONFIG_${opt}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::必需内核配置缺失（见上方 MISS 列表）"
+            exit 1
+          fi
+
+      - name: Build kernel (Image.gz)
+        env:
+          # 关键：LOCALVERSION 设为空串，阻止 scripts/setlocalversion 在
+          # CONFIG_LOCALVERSION_AUTO=n 时仍调用 scm_version --short 附加 "+"
+          # 保证 UTS_RELEASE 与官方 vermagic 逐字符一致
+          LOCALVERSION: ''
+        run: |
+          make -C kernel O="$KERNEL_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 LOCALVERSION= -j"$(nproc)" Image.gz
+
+      - name: Verify kernel banner / UTS_RELEASE (vermagic-critical)
+        run: |
+          set -euo pipefail
+          gunzip -c "$KERNEL_OUT/arch/arm64/boot/Image.gz" > Image
+          got="$(sed -n 's/^#define UTS_RELEASE \"\(.*\)\"$/\1/p' "$KERNEL_OUT/include/generated/utsrelease.h")"
+          echo "UTS_RELEASE = $got"
+          if grep -aq "Linux version $got" Image; then
+            echo "banner 字符串已嵌入 Image"
+          else
+            echo "::error::banner 未嵌入 Image"; exit 1
+          fi
+          {
+            echo "### 版本校验"
+            echo '```'
+            echo "UTS_RELEASE = $got"
+            grep -aom1 "Linux version [^ ]* [^(]*" Image || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$KERNEL_SHA" = "$OFFICIAL_SHA" ]; then
+            if [ "$got" != "$EXPECTED_UTSRELEASE" ]; then
+              echo "::error::UTS_RELEASE 与官方不符："
+              echo "  got      = $got"
+              echo "  expected = $EXPECTED_UTSRELEASE"
+              echo "（厂商模块 vermagic 校验会失败，禁止放行）"
+              exit 1
+            fi
+            echo "official banner match: OK"
+            echo "official-banner-match: OK ($got)" | tee banner-check.txt
+          else
+            echo "::warning::kernel_sha 不是官方基线，跳过严格校验（当前 $got）"
+            echo "utsrelease: $got" | tee banner-check.txt
+          fi
+
+      - name: Build boot.img (Android boot v4)
+        run: |
+          python3 tools/mkboot_v4.py build "$KERNEL_OUT/arch/arm64/boot/Image.gz" boot.img
+          python3 tools/mkboot_v4.py info boot.img | tee boot-img-info.txt
+          ls -l boot.img
+
+      - name: Package AnyKernel3 zip
+        run: |
+          set -euo pipefail
+          curl -fSL "https://codeload.github.com/osm0sis/AnyKernel3/zip/refs/heads/master" -o ak3.zip
+          unzip -q ak3.zip
+          cp -r AnyKernel3-master AnyKernel3
+          cp config/anykernel.sh AnyKernel3/anykernel.sh
+          cp "$KERNEL_OUT/arch/arm64/boot/Image.gz" AnyKernel3/Image.gz
+          (cd AnyKernel3 && zip -qr9 ../anykernel.zip anykernel.sh tools ramdisk patch META-INF modules LICENSE README.md)
+          ls -l anykernel.zip
+          unzip -l anykernel.zip | grep -E 'Image.gz|anykernel.sh' | head -n 4
+
+      - name: Upload boot.img / AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-img-${{ env.KERNEL_SHA }}-ksu-${{ env.KSU_TAG }}
+          path: |
+            boot.img
+            anykernel.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Image.gz / Image / config / logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-${{ env.KERNEL_SHA }}-ksu-${{ env.KSU_TAG }}
+          path: |
+            Image
+            ${{ env.KERNEL_OUT }}/arch/arm64/boot/Image.gz
+            ${{ env.KERNEL_OUT }}/.config
+            ${{ env.KERNEL_OUT }}/include/generated/utsrelease.h
+            banner-check.txt
+            boot-img-info.txt
+          if-no-files-found: error
+          retention-days: 14

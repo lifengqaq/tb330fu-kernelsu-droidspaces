@@ -1,0 +1,56 @@
+#
+# Droidspaces GKI 内核配置 fragment
+# 来源：Droidspaces-OSS Documentation/Kernel-Configuration.md
+#       "Configuring GKI Kernels" -> Step 2 "GKI-Exclusive Configuration"
+#       (https://github.com/ravindu644/Droidspaces-OSS)
+# 用途：由 .github/workflows/build.yml 在 barley_defconfig 之后通过源码树
+#       scripts/kconfig/merge_config.sh 叠加，启用 Droidspaces 容器所需、
+#       且经 Droidspaces 官方在 GKI 内核上验证为 kABI 安全的选项。
+#
+#  前置条件：必须先打 patches/0001-droidspaces-gki-sysvipc-kabi.patch
+#   （SYSVIPC kABI 补丁）。否则开启 CONFIG_SYSVIPC/CONFIG_IPC_NS 会改变
+#   task_struct 布局并漂移 genksyms CRC，厂商模块加载失败甚至无法开机。
+#
+# 本机官方 config 现状：以下 16 项全部为 "not set"（除注明外），
+# CGROUPS=y / VETH=y / BRIDGE=y / UTS_NS=y / NET_NS=y 官方已有，无需重复。
+#
+
+# IPC
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+
+# Namespaces
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+
+# HW Access Support
+CONFIG_DEVTMPFS=y
+
+# Networking (Enhanced NAT support)
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+
+# --- 以下为官方标注可选但推荐的选项 ---
+
+# Fix for docker unsafe procfs error
+CONFIG_USER_NS=y
+
+# UFW support
+CONFIG_NETFILTER_XT_TARGET_REJECT=y
+CONFIG_NETFILTER_XT_TARGET_LOG=y
+CONFIG_NETFILTER_XT_MATCH_RECENT=y
+
+# Fail2ban support
+CONFIG_IP_SET=y
+CONFIG_IP_SET_HASH_IP=y
+CONFIG_IP_SET_HASH_NET=y
+CONFIG_NETFILTER_XT_SET=y
+
+# Enable xattr, posix acl support on tmpfs (NixOS)
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+
+# --- 本项目附加（Droidspaces 文档之外，为 kABI 补丁生效所需）---
+# ANDROID_KABI_RESERVE 在 android15-6.6 默认即 y（官方 config 亦为 y），
+# 此处显式固定：若该开关被关掉，0001 补丁中的 ANDROID_KABI_USE(6/7/8)
+# 将展开为空，sysvsem/sysvshm 字段消失，ipc/*.c 直接编译失败。
+CONFIG_ANDROID_KABI_RESERVE=y
