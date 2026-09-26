@@ -73,15 +73,33 @@ jobs:
       - name: Fetch kernel source at pinned commit
         run: |
           set -euo pipefail
+          # googlesource 对数据中心 IP（GitHub Actions）会 503，主路改走 GitHub 官方镜像
+          MIRROR="https://github.com/aosp-mirror/kernel_common.git"
+          REF="$KERNEL_SHA"
+          if [ "$REF" = "94c1a24cabd5" ]; then
+            REF="94c1a24cabd5dc987132f98c4d7a7a32f2a38fef"
+          fi
           git init -q kernel
-          git -C kernel remote add origin "$GKI_REPO"
-          if ! git -C kernel fetch --depth 1 origin "$KERNEL_SHA"; then
-            echo "::warning::git SHA fetch 失败，回退到 gitiles 归档 tar（无 .git，不影响构建）"
-            curl -fSL "https://android.googlesource.com/kernel/common/+archive/${KERNEL_SHA}.tar.gz" -o ksrc.tar.gz
-            tar -xzf ksrc.tar.gz -C kernel
-          else
+          fetch_ok=0
+          if git -C kernel fetch --depth 1 "$MIRROR" "$REF"; then
             git -C kernel checkout --detach FETCH_HEAD
             echo "kernel commit: $(git -C kernel rev-parse HEAD)"
+            fetch_ok=1
+          else
+            echo "::warning::GitHub 镜像 git fetch 失败，回退 codeload tar（无 .git，不影响构建）"
+            if curl -fSL --retry 3 --retry-all-errors \
+                 "https://codeload.github.com/aosp-mirror/kernel_common/tar.gz/${REF}" -o ksrc.tar.gz; then
+              tar -xzf ksrc.tar.gz -C kernel --strip-components=1
+              fetch_ok=1
+            elif curl -fSL --retry 3 --retry-all-errors \
+                 "${GKI_REPO}/+archive/${REF}.tar.gz" -o ksrc.tar.gz; then
+              echo "::warning::使用 googlesource 归档（该源在 Actions IP 上常见 503）"
+              tar -xzf ksrc.tar.gz -C kernel
+              fetch_ok=1
+            fi
+          fi
+          if [ "$fetch_ok" -ne 1 ]; then
+            echo "::error::内核源码全部拉取方式失败"; exit 1
           fi
           echo "--- Makefile 版本 ---"
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' kernel/Makefile
