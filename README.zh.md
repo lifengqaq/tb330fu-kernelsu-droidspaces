@@ -299,39 +299,24 @@ android15-6.6 GKI 源码树（94c1a24cabd5）中已被 Google 整体移除（无
 - **Q: boot.img 比分区小（约 14MB vs 32MB）能刷吗？**
   可以。工具只写 header + 内核对齐段；未用区域保持原样或补零均可。
 
-## A1. 卡第一屏（开机 Logo 冻结） AVB 校验问题
+## A1. 卡第一屏（开机 Logo 冻结） 已确认根因与修复
 
-**现象**：BROM 刷入本仓库 boot.img 后停在第一屏（Lenovo logo）不动、不重启。
+**根因（已通过对本机历史镜像逆向确认）**：boot 分区 32MB，半截镜像（只有内核大小）
+刷入后尾部残留**原厂 AVB footer**，指向的 vbmeta 偏移已被新内核数据覆盖；MTK LK
+解析到"垃圾 vbmeta"后冻结在第一屏。本机引导链：bootloader 已解锁（orange 状态，
+不做签名校验），但 footer/vbmeta 结构仍会被解析。
 
-**原因**：本内核替换了 boot 分区内容但没有（也无法）重签 AVB。设备引导链校验失败时
-MTK LK 会冻结在 logo。与"之前刷 AOSP 内核卡屏、用 avbtool 处理后就好了"是同一个问题。
+**历史佐证**：本机曾成功运行过自编内核（KSU 3.2.5 + Droidspaces），当时的可启动镜像
+全部是 32MB 整尺寸，且部分带 avbtool 哈希 footer（algorithm NONE）。
 
-**立即救砖**：BROM（GeekFlashTool）把当前槽位的原厂 boot 备份刷回去即可恢复。
+**修复（GeekFlashTool/mtkclient，按序刷入活动槽位 b）**：
+1. `vbmeta_disabled.img`  **vbmeta_b**（avbtool make_vbmeta_image --flags 3，关闭校验）
+2. `boot.img`（本仓库 Release，32MB + avbtool NONE footer） **boot_b**
+3. 重启。若仍冻结：LK 强制 dm-verity 场景，按 lkpatcher 流程补丁 lk_a/lk_b 后重试。
 
-**修复（BROM 路线，等价于 avbtool 处理）**：
+**回滚**：原厂 vbmeta_b/boot_b 备份在本机 `D:\Desktop\tb330fu\backup\GeekFlashTool_Readback_20260619190331843\`。
 
-1. 刷 `vbmeta_disabled.img` 到**活动槽位的 vbmeta 分区**（vbmeta_b / vbmeta_a）。
-   该文件即 `avbtool make_vbmeta_image --flags 3`（bit0=禁用 hashtree/dm-verity，
-   bit1=禁用 AVB 校验），4KB；
-2. 刷 `boot-32m-zerotail.img`（本仓库 boot.img 补齐到 32MB、尾部全零）到活动槽位 boot
-   分区避免半截镜像刷入后分区尾部残留旧 AVB footer 指向已被覆盖的 vbmeta；
-3. 重启。
-
-**如果仍然卡屏或提示 Dm-verity corruption error**：说明 LK 本身强制校验（解锁状态相关），
-需要 lkpatcher 补丁 LK（社区已验证流程，见第 9 节方式 C 引用的 threadexio/tb330fu）：
-读出 lk_a/lk_b  `lkpatcher lk_x.bin -o lk_x.patched.bin`  写回  再执行上面 1-3 步。
-
-**fastboot 路线**（若 bootloader 可解锁）：
-
-```
-fastboot flashing unlock                     # 会清数据！
-fastboot flash --disable-verity --disable-verification vbmeta vbmeta_disabled.img
-fastboot flash boot boot-32m-zerotail.img
-fastboot reboot
-```
-
-**注**：刷了 flags=3 的 vbmeta 后系统分区 dm-verity 同步关闭，OTA 可能拒绝升级
-属预期行为，恢复官方升级需刷回原厂 vbmeta。
+**注意**：vbmeta 关闭校验后 dm-verity 同步失效，OTA 升级会失败；恢复 OTA 需刷回原厂 vbmeta。
 
 ## 15. 致谢与许可
 

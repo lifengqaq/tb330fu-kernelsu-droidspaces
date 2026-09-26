@@ -235,6 +235,25 @@ jobs:
           python3 tools/mkboot_v4.py info boot.img | tee boot-img-info.txt
           ls -l boot.img
 
+      - name: Add AVB hash footer (community-proven format, algorithm NONE)
+        # TB330FU 的 LK 会解析 boot 分区的 AVB footer；半截镜像刷入会残留旧 footer
+        # 指向已被覆盖的 vbmeta 导致冻结在第一屏。此步骤产出 32MB 整尺寸镜像，
+        # 带 NONE 算法哈希描述符 footer（与已验证可启动的社区镜像同构）。
+        run: |
+          set -euo pipefail
+          cp boot.img boot-nosig.img
+          python3 tools/avbtool.py add_hash_footer \
+            --image boot.img \
+            --partition_size 33554432 \
+            --partition_name boot \
+            --algorithm NONE \
+            --salt 014d0f17ca8359f23ed8b03e35e679b983b87f8f4d4636a9d5e41c6e19a09c0c \
+            --prop "com.android.build.boot.os_version:15" \
+            --prop "com.android.build.boot.fingerprint:Lenovo/TB330FU/TB330FU:15/AP3A.240905.015.A2/S2001962_250417_ROW:user/release-keys" \
+            --prop "com.android.build.boot.security_patch:2024-09-05"
+          python3 tools/avbtool.py info_image --image boot.img | tee boot-avb-info.txt
+          ls -l boot.img boot-nosig.img
+
       - name: Package AnyKernel3 zip
         run: |
           set -euo pipefail
@@ -253,6 +272,7 @@ jobs:
           name: boot-img-${{ env.KERNEL_SHA }}-ksu-${{ env.KSU_TAG }}
           path: |
             boot.img
+            boot-nosig.img
             anykernel.zip
           if-no-files-found: error
           retention-days: 14
@@ -268,5 +288,6 @@ jobs:
             ${{ env.KERNEL_OUT }}/include/generated/utsrelease.h
             banner-check.txt
             boot-img-info.txt
+            boot-avb-info.txt
           if-no-files-found: error
           retention-days: 14

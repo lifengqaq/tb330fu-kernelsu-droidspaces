@@ -1,20 +1,32 @@
-From 769a5cfdc17b98d8e0bd491d45f5651180e42196 Mon Sep 17 00:00:00 2001
-From: nullptr-t-oss <127822226+nullptr-t-oss@users.noreply.github.com>
-Date: Wed, 8 Apr 2026 09:18:23 +0000
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: kbuild <kbuild@localhost>
+Date: Thu, 1 Jan 2026 00:00:00 +0000
 Subject: [PATCH] ABI: use ABI padding for SYSVIPC
 
-This commit allows us to enable CONFIG_SYSVIPC in defconfig without breaking kernel ABI.
+Refreshed copy of Droidspaces-OSS
+Documentation/resources/kernel-patches/GKI/below-kernel-6.12/
+001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+(original by nullptr-t-oss <127822226+nullptr-t-oss@users.noreply.github.com>),
+regenerated against AOSP kernel/common 94c1a24cabd5 (android15-6.6, Linux 6.6.30)
+so that `git apply` succeeds without fuzz. The change is semantically identical
+to the original patch: task_struct's CONFIG_SYSVIPC fields are commented out and
+re-created inside ANDROID_KABI_RESERVE(6/7/8) via ANDROID_KABI_USE /
+_ANDROID_KABI_REPLACE, so struct layout and genksyms CRCs stay identical to the
+stock kernel (see __GENKSYMS__ branch in include/linux/android_kabi.h).
 
-Signed-off-by: nullptr-t-oss <127822226+nullptr-t-oss@users.noreply.github.com>
+Use this file only if the stock 0001 patch stops applying at all
+(the build workflow applies patches/*.patch with a GNU patch --fuzz=2
+fallback, which normally suffices).
+
+Signed-off-by: kbuild <kbuild@localhost>
 ---
  include/linux/sched.h | 10 ++++++++--
  1 file changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index b275cd285182..f03e0d5e49c1 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1074,8 +1074,8 @@ struct task_struct {
+@@ -1072,8 +1072,8 @@
  	struct nameidata		*nameidata;
  
  #ifdef CONFIG_SYSVIPC
@@ -25,7 +37,7 @@ index b275cd285182..f03e0d5e49c1 100644
  #endif
  #ifdef CONFIG_DETECT_HUNG_TASK
  	unsigned long			last_switch_count;
-@@ -1513,9 +1513,15 @@ struct task_struct {
+@@ -1521,9 +1521,15 @@
  	ANDROID_KABI_RESERVE(3);
  	ANDROID_KABI_RESERVE(4);
  	ANDROID_KABI_RESERVE(5);
@@ -39,5 +51,5 @@ index b275cd285182..f03e0d5e49c1 100644
  	ANDROID_KABI_RESERVE(8);
 +#endif
  
+ #ifdef CONFIG_RV
  	/*
- 	 * New fields for task_struct should be added above here, so that
