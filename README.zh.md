@@ -170,37 +170,55 @@ KernelSU 所需的最小增量**（两个 fragment + kABI 补丁），不做任�
 
 ## 9. 刷入方式
 
-> **刷机有风险。** 任何一步都可能变砖。务必先完整备份当前槽位的
-> `boot`（以及 `init_boot`、`vendor_boot`、`dtbo` 等）分区镜像，
-> 保留 Fastboot/BROM 救砖通道，再开始操作。
+> **刷机有风险。** 任何一步都可能变砖。开始前务必：
+> 1. 确认当前**活动槽位**（重要！本机是 A/B 双槽，你的旧槽位 A 里是 4.19 老固件，
+>    当前 Android 15 / 6.6.30 在另一个槽位）。确认方法：`adb shell getprop ro.boot.slot_suffix`
+>    （返回 `_a` 或 `_b`），或看 GeekFlashTool 的槽位信息。**新内核必须刷到活动槽位的
+>    `boot` 分区**（如活动槽为 b 则刷 `boot_b`）。
+> 2. 用 GeekFlashTool / mtkclient 完整备份活动槽位的 `boot`、`vendor_boot`、`dtbo`、
+>    `vbmeta`（本机**没有 init_boot 分区**；vendor_boot 64MB，recovery ramdisk 在里面）。
+> 3. 保留 BROM 救砖通道。
 
-### 方式 A：GeekFlashTool（BROM 直刷 boot.img）推荐
+### 方式 A：GeekFlashTool（BROM 直刷 boot.img） 你的已验证通道
 
-1. 手机关机，按住音量键（MTK BROM 模式）连接电脑；
-2. GeekFlashTool 选择 `boot` 分区（注意当前槽位 a/b），刷入
-   下载的 `boot.img`；
-3. 重启。首次启动较慢（SELinux 重建等）属正常。
+1. 关机，进入 MTK BROM 模式连接电脑；
+2. 选择**活动槽位**的 `boot` 分区，刷入构建产出的 `boot.img`；
+3. 重启。首次启动较慢（SELinux 重建）属正常。
 
-此前用无签名的 AOSP 自编译镜像刷入可正常启动，说明本机引导流程
-不强制 AVB 校验本工具产出的 `boot.img` 不含 signature/footer。
+说明：此前你刷过无签名的 AOSP 自编译 boot 能正常启动（仅 WiFi 挂），证明本机
+当前引导链不拦截无签名 boot；本仓库产物同样不含 AVB signature/footer。
+若刷入后遇到 "Dm-verity corruption error"（部分解锁状态会出现，见下方 lkpatcher 说明），
+先按方式 C 的 lkpatcher 流程处理 LK，再刷。
 
 ### 方式 B：AnyKernel3（已 root / 自定义 recovery 下刷）
 
 1. 把 `anykernel.zip` 传到手机；
-2. 在 KernelSU 管理器或自定义 recovery 中刷入该 zip
-   （AK3 会自动 dump 当前 boot、替换内核、回写）。
+2. 在自定义 recovery 或 KernelSU 管理器中刷入（AK3 自动 dump 当前 boot、替换内核、回写）。
 
-### 方式 C：fastboot（若 bootloader 已解锁）
+### 方式 C：fastboot（bootloader 已解锁；社区已验证的完整链路）
+
+TB330FU 的解锁+刷机链路已被社区完整走通（threadexio/tb330fu），关键点：
+
+1. **先 BROM 全盘备份**（mtkclient：`mtk r boot_a boot.img` 等逐分区备份）；
+2. **lkpatcher 补丁 LK**（关键步骤！不补丁的话解锁后会报
+   "Dm-verity corruption error" 无法开机）：`lkpatcher lk_a.bin -o lk_a.patched.bin`
+   （lk_b 同理），用 mtkclient 写回两个 lk 分区；工具：
+   https://github.com/R0rt1z2/lkpatcher ；
+3. 系统设置开启 OEM unlocking，然后 `fastboot flashing unlock`；
+4. 刷入（vbmeta 用原版 + 标志即可，无需自制）：
 
 ```
-fastboot flash boot boot.img
+fastboot flash --disable-verity --disable-verification vbmeta   <你的原版 vbmeta 备份>
+fastboot flash --disable-verity --disable-verification boot     <本仓库构建的 boot.img>
+# vendor_boot 保持原厂不动（其 AVB footer algorithm=NONE，本方案不需要碰它）
 fastboot reboot
 ```
 
 ### 回滚
 
-用备份的原厂镜像按同样方式刷回即可（或 `fastboot flash boot
-boot_backup.img`）。
+用之前备份的原厂 boot 按同样方式刷回即可；最坏情况（bootloop）走 BROM 救援：
+联想官方线刷整包存在`TB330FU_CN_OPEN_USER_V15.155_U_ZUI_16.0.068_ST_241112.7z`
+（kdocs 网盘：https://www.kdocs.cn/l/cndiYFdYTlfq ），整包线刷无需 AVB 处理。
 
 ## 10. KernelSU 管理器
 
