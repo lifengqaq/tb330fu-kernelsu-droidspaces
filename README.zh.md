@@ -299,6 +299,40 @@ android15-6.6 GKI 源码树（94c1a24cabd5）中已被 Google 整体移除（无
 - **Q: boot.img 比分区小（约 14MB vs 32MB）能刷吗？**
   可以。工具只写 header + 内核对齐段；未用区域保持原样或补零均可。
 
+## A1. 卡第一屏（开机 Logo 冻结） AVB 校验问题
+
+**现象**：BROM 刷入本仓库 boot.img 后停在第一屏（Lenovo logo）不动、不重启。
+
+**原因**：本内核替换了 boot 分区内容但没有（也无法）重签 AVB。设备引导链校验失败时
+MTK LK 会冻结在 logo。与"之前刷 AOSP 内核卡屏、用 avbtool 处理后就好了"是同一个问题。
+
+**立即救砖**：BROM（GeekFlashTool）把当前槽位的原厂 boot 备份刷回去即可恢复。
+
+**修复（BROM 路线，等价于 avbtool 处理）**：
+
+1. 刷 `vbmeta_disabled.img` 到**活动槽位的 vbmeta 分区**（vbmeta_b / vbmeta_a）。
+   该文件即 `avbtool make_vbmeta_image --flags 3`（bit0=禁用 hashtree/dm-verity，
+   bit1=禁用 AVB 校验），4KB；
+2. 刷 `boot-32m-zerotail.img`（本仓库 boot.img 补齐到 32MB、尾部全零）到活动槽位 boot
+   分区避免半截镜像刷入后分区尾部残留旧 AVB footer 指向已被覆盖的 vbmeta；
+3. 重启。
+
+**如果仍然卡屏或提示 Dm-verity corruption error**：说明 LK 本身强制校验（解锁状态相关），
+需要 lkpatcher 补丁 LK（社区已验证流程，见第 9 节方式 C 引用的 threadexio/tb330fu）：
+读出 lk_a/lk_b  `lkpatcher lk_x.bin -o lk_x.patched.bin`  写回  再执行上面 1-3 步。
+
+**fastboot 路线**（若 bootloader 可解锁）：
+
+```
+fastboot flashing unlock                     # 会清数据！
+fastboot flash --disable-verity --disable-verification vbmeta vbmeta_disabled.img
+fastboot flash boot boot-32m-zerotail.img
+fastboot reboot
+```
+
+**注**：刷了 flags=3 的 vbmeta 后系统分区 dm-verity 同步关闭，OTA 可能拒绝升级
+属预期行为，恢复官方升级需刷回原厂 vbmeta。
+
 ## 15. 致谢与许可
 
 - **AOSP kernel/common**（GPL-2.0）：内核源码基线。
