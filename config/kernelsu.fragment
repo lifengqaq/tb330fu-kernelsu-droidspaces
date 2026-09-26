@@ -28,6 +28,9 @@ CONFIG_KPROBE_EVENTS=y
 # 需重新加回 CONFIG_FTRACE_SYSCALLS=y（连带 GENERIC_TRACER），但本机未验证。
 CONFIG_FTRACE=y
 CONFIG_TRACEPOINTS=y
+# KernelSU v3.3.x 的 syscall tracepoint dispatcher 硬依赖（链接需要 sys_enter）。
+# v3.2.5 不需要但带着无害。本项与 USER_NS 无关，非毒药项嫌疑。
+CONFIG_FTRACE_SYSCALLS=y
 
 # 符号解析（sys_call_table / __arm64_sys_ni_syscall 定位）
 CONFIG_KALLSYMS=y
