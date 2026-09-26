@@ -301,10 +301,17 @@ android15-6.6 GKI 源码树（94c1a24cabd5）中已被 Google 整体移除（无
 
 ## A1. 卡第一屏（开机 Logo 冻结） 已确认根因与修复
 
-**根因（已通过对本机历史镜像逆向确认）**：boot 分区 32MB，半截镜像（只有内核大小）
-刷入后尾部残留**原厂 AVB footer**，指向的 vbmeta 偏移已被新内核数据覆盖；MTK LK
-解析到"垃圾 vbmeta"后冻结在第一屏。本机引导链：bootloader 已解锁（orange 状态，
-不做签名校验），但 footer/vbmeta 结构仍会被解析。
+**根因（已通过对本机历史镜像逆向确认）**：本机 vbmeta_b（原厂）含 boot 链式校验
+描述符LK 启动时必须在 boot 分区找到合法的 AVB footer 并解析其指向的 vbmeta
+（解锁/orange 状态不验签名，但解析躲不掉）。三种镜像形态：
+
+| 形态 | LK 行为 | 结果 |
+|---|---|---|
+| 半截镜像（<分区大小） | 残留旧 footer 指向已被覆盖的 vbmeta | 冻结 |
+| 32MB 全零尾（无 footer） | 找不到 footer/vbmeta | 冻结（zerotail 实测） |
+| 32MB + avbtool NONE footer | 解析通过、无签名可验 | 可启动（本机 6 月实测） |
+
+bootloader 已解锁（orange），签名校验关闭，但**结构解析是硬要求**。
 
 **历史佐证**：本机曾成功运行过自编内核（KSU 3.2.5 + Droidspaces），当时的可启动镜像
 全部是 32MB 整尺寸，且部分带 avbtool 哈希 footer（algorithm NONE）。
