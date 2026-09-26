@@ -35,7 +35,11 @@ CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
 CONFIG_USER_NS=y
 
 # UFW support
-CONFIG_NETFILTER_XT_TARGET_REJECT=y
+# 注意：CONFIG_NETFILTER_XT_TARGET_REJECT 在 android15-6.6 GKI 树中已被 Google
+# 整体移除（无 xt_REJECT.c、无该 Kconfig 符号），官方 stock 亦未启用 nftables
+# （NF_TABLES 未开）。因此 UFW 的 REJECT 规则在本内核不可用（Droidspaces 文档
+# 标注此项为可选）；DROP/ACCEPT/LOG 等其余规则不受影响。强行启用需引入整套
+# nftables 栈，config 面扩大，故按"最小增量"原则舍弃。
 CONFIG_NETFILTER_XT_TARGET_LOG=y
 CONFIG_NETFILTER_XT_MATCH_RECENT=y
 

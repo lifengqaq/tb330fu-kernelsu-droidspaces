@@ -225,6 +225,17 @@ boot_backup.img`）。
    全绿（PID/MNT/UTS/IPC 命名空间、devtmpfs、cgroups、seccomp 等）
    即本内核的 Droidspaces 增量全部生效。
 
+### UFW / REJECT 规则的限制
+
+Droidspaces 文档的 GKI 推荐配置包含 `CONFIG_NETFILTER_XT_TARGET_REJECT`，但该目标在
+android15-6.6 GKI 源码树（94c1a24cabd5）中已被 Google 整体移除（无 `xt_REJECT.c`、
+无对应 Kconfig 符号），官方 stock 配置也未启用 nftables（`NF_TABLES` 未开）。因此：
+
+- UFW 的 REJECT 类规则在本内核上不可用（Droidspaces 官方将此项标注为"可选"）
+- UFW 的 DROP / ACCEPT / LOG 等其余规则正常；Fail2ban 所需的 IP_SET 全套已启用
+- 若未来确需 REJECT，可在 fragment 中引入 `NF_TABLES=y` + `NFT_REJECT=y` + `NFT_COMPAT=y`
+  （config 面扩大，需自行评估与厂商模块的兼容性后再上机）
+
 ## 12. 为什么不用 SusFS
 
 - Droidspaces 官方（Documentation / Kernel-Configuration.md）明确
