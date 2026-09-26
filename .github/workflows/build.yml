@@ -243,7 +243,7 @@ jobs:
           cp -r AnyKernel3-master AnyKernel3
           cp config/anykernel.sh AnyKernel3/anykernel.sh
           cp "$KERNEL_OUT/arch/arm64/boot/Image.gz" AnyKernel3/Image.gz
-          (cd AnyKernel3 && zip -qr9 ../anykernel.zip anykernel.sh tools ramdisk patch META-INF modules LICENSE README.md)
+          (cd AnyKernel3 && zip -qr9 ../anykernel.zip anykernel.sh Image.gz tools ramdisk patch META-INF modules LICENSE README.md)
           ls -l anykernel.zip
           unzip -l anykernel.zip | grep -E 'Image.gz|anykernel.sh' | head -n 4
 
