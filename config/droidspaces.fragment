@@ -31,8 +31,10 @@ CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
 
 # --- 以下为官方标注可选但推荐的选项 ---
 
-# Fix for docker unsafe procfs error
-CONFIG_USER_NS=y
+# CONFIG_USER_NS 禁用（本机实测毒药项）：
+# 2026-06 本机多轮实验（userns / userns-only 变体）均不开机；
+# 实际跑通的内核（logs/running_success_config.txt）CONFIG_USER_NS=n。
+# Droidspaces 核心功能不依赖它（它是 docker procfs 报错的可选修复）。
 
 # UFW support
 # 注意：CONFIG_NETFILTER_XT_TARGET_REJECT 在 android15-6.6 GKI 树中已被 Google

@@ -23,10 +23,11 @@ CONFIG_HAVE_KPROBES=y
 CONFIG_KRETPROBES=y
 CONFIG_KPROBE_EVENTS=y
 
-# sys_enter tracepoint（KernelSU v3.x syscall dispatcher 必需）
+# KernelSU v3.2.5（本机 2026-06 实测可启动版本）不需要 FTRACE_SYSCALLS。
+# 注意：若改用 KernelSU v3.3.0+（syscall tracepoint dispatcher 架构），
+# 需重新加回 CONFIG_FTRACE_SYSCALLS=y（连带 GENERIC_TRACER），但本机未验证。
 CONFIG_FTRACE=y
 CONFIG_TRACEPOINTS=y
-CONFIG_FTRACE_SYSCALLS=y
 
 # 符号解析（sys_call_table / __arm64_sys_ni_syscall 定位）
 CONFIG_KALLSYMS=y
