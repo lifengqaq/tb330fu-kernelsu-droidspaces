@@ -1,0 +1,164 @@
+﻿name: Build TB330FU kernel (kleaf, official AOSP toolchain)
+
+# 复刻本机 2026-06 验证可启动的构建方式：repo 同步 common-android15-6.6-2024-08
+# 工作区（kleaf + AOSP 密封 clang），common 钉在 android15-6.6-2024-08_r5
+# （= 设备官方内核 94c1a24cabd5），KernelSU + Droidspaces 选项与配置同 6 月实测。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_tag:
+        description: 'KernelSU tag'
+        required: false
+        default: 'v3.2.5'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  MANIFEST_URL: https://android.googlesource.com/kernel/manifest
+  MANIFEST_BRANCH: common-android15-6.6-2024-08
+  KERNEL_TAG: android15-6.6-2024-08_r5
+  KERNEL_MIRROR: https://github.com/aosp-mirror/kernel_common.git
+
+jobs:
+  kleaf:
+    name: kleaf GKI build -> boot.img
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      KSU_TAG: ${{ github.event.inputs.ksu_tag || 'v3.2.5' }}
+    steps:
+      - name: Checkout kbuild repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/julia* /usr/lib/llvm* \
+            /opt/hostedtoolcache 2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / /mnt
+
+      - name: Install repo tool
+        run: |
+          sudo curl -sSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+          sudo chmod a+x /usr/local/bin/repo
+          git config --global user.name "kernel build"
+          git config --global user.email "kernel@build.invalid"
+
+      - name: Init and sync GKI workspace
+        run: |
+          set -euo pipefail
+          mkdir -p /mnt/gki
+          cd /mnt/gki
+          repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
+          # common 由 GitHub 镜像按 tag 单独克隆（googlesource 的同名分支已不存在，
+          # 镜像的 android15-6.6-2024-08_r5 == 94c1a24cabd5 == 设备官方内核 commit）
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/nocommon.xml <<EOF
+          <manifest>
+            <remove-project name="kernel/common"/>
+          </manifest>
+          EOF
+          repo sync -c -j8 || repo sync -c -j8 || repo sync -c -j4
+          git clone --depth 1 -b "$KERNEL_TAG" "$KERNEL_MIRROR" common
+          echo "common commit: $(git -C common rev-parse HEAD)"
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)' common/Makefile
+          ls
+
+      - name: Integrate KernelSU + Droidspaces + defconfig
+        run: |
+          set -euo pipefail
+          cd /mnt/gki/common
+          patch -p1 --fuzz=2 --no-backup-if-mismatch \
+            < "$GITHUB_WORKSPACE/patches/0001-droidspaces-gki-sysvipc-kabi.patch"
+          find . -name '*.rej' | grep . && { echo "::error::patch rejected"; exit 1; } || true
+          git clone --depth 1 -b "$KSU_TAG" https://github.com/tiann/KernelSU KernelSU
+          python3 "$GITHUB_WORKSPACE/tools/kleaf_integrate.py" \
+            --common /mnt/gki/common \
+            --defconfig "$GITHUB_WORKSPACE/config/barley_defconfig"
+
+      - name: Build (kleaf, hermetic AOSP clang)
+        run: |
+          set -euo pipefail
+          cd /mnt/gki
+          if [ -x tools/bazel ]; then
+            tools/bazel run //common:kernel_aarch64_dist -- --dist_dir="$PWD/dist"
+          else
+            bash build/kernel/kleaf/bazel.sh run //common:kernel_aarch64_dist -- --dist_dir="$PWD/dist"
+          fi
+          echo "---- dist ----"
+          ls -l dist | head -n 60
+
+      - name: Verify kernel banner (informational)
+        run: |
+          set -uo pipefail
+          if [ -f /mnt/gki/dist/Image.gz ]; then
+            gunzip -c /mnt/gki/dist/Image.gz > Image
+          elif [ -f /mnt/gki/dist/boot-gz.img ]; then
+            python3 - <<'PY'
+            import struct, gzip
+            d = open("/mnt/gki/dist/boot-gz.img","rb").read()
+            ksz = struct.unpack("<I", d[8:12])[0]
+            open("Image","wb").write(gzip.decompress(d[4096:4096+ksz]))
+            PY
+          else
+            echo "::warning::no Image.gz/boot-gz.img in dist"; exit 1
+          fi
+          grep -aom1 "Linux version .*" Image | tee banner.txt || true
+          grep -aom1 "KernelSU" Image >/dev/null && echo "KernelSU embedded: YES" | tee -a banner.txt
+
+      - name: Package boot.img (Android boot v4 + AVB NONE footer)
+        run: |
+          set -euo pipefail
+          python3 tools/mkboot_v4.py build /mnt/gki/dist/Image.gz boot.img
+          python3 tools/mkboot_v4.py info boot.img | tee boot-img-info.txt
+          cp boot.img boot-nosig.img
+          python3 tools/avbtool.py add_hash_footer \
+            --image boot.img \
+            --partition_size 33554432 \
+            --partition_name boot \
+            --algorithm NONE \
+            --salt 014d0f17ca8359f23ed8b03e35e679b983b87f8f4d4636a9d5e41c6e19a09c0c \
+            --prop "com.android.build.boot.os_version:15" \
+            --prop "com.android.build.boot.fingerprint:Lenovo/TB330FU/TB330FU:15/AP3A.240905.015.A2/S2001962_250417_ROW:user/release-keys" \
+            --prop "com.android.build.boot.security_patch:2024-09-05"
+          python3 tools/avbtool.py info_image --image boot.img | tee boot-avb-info.txt
+          ls -l boot.img
+
+      - name: Package AnyKernel3 zip
+        run: |
+          set -euo pipefail
+          curl -fSL "https://codeload.github.com/osm0sis/AnyKernel3/zip/refs/heads/master" -o ak3.zip
+          unzip -q ak3.zip
+          cp -r AnyKernel3-master AnyKernel3
+          cp config/anykernel.sh AnyKernel3/anykernel.sh
+          cp /mnt/gki/dist/Image.gz AnyKernel3/Image.gz
+          (cd AnyKernel3 && zip -qr9 ../anykernel.zip anykernel.sh Image.gz tools ramdisk patch META-INF modules LICENSE README.md)
+          ls -l anykernel.zip
+
+      - name: Upload boot.img / AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: kleaf-boot-img-ksu-${{ env.KSU_TAG }}
+          path: |
+            boot.img
+            boot-nosig.img
+            anykernel.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload kernel details
+        uses: actions/upload-artifact@v4
+        with:
+          name: kleaf-kernel-ksu-${{ env.KSU_TAG }}
+          path: |
+            banner.txt
+            boot-img-info.txt
+            boot-avb-info.txt
+            /mnt/gki/dist/*.config
+            /mnt/gki/dist/vmlinux
+          if-no-files-found: warn
+          retention-days: 7
